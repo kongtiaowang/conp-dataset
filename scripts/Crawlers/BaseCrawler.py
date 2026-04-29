@@ -3,6 +3,8 @@ import json
 import os
 import re
 import shutil
+import subprocess
+from email.message import EmailMessage
 
 import git
 import requests
@@ -84,6 +86,7 @@ class BaseCrawler:
         self.git = git
         self.datalad = api
         self.no_pr = no_pr
+        self.config = self._load_config()
         if self.verbose:
             print(f"Using base directory {self.basedir}")
 
@@ -248,83 +251,16 @@ class BaseCrawler:
                 dataset_dir = os.path.join(self.basedir, dataset_rel_dir)
                 d = self.datalad.Dataset(dataset_dir)
                 if branch_name not in self.repo.remotes.origin.refs:  # New dataset
-                    self.repo.git.checkout("-b", branch_name)
-                    repo_title = ("conp-dataset-" + dataset_description["title"])[0:100]
-                    try:
-                        d.create()
-                        r = d.create_sibling_github(
-                            repo_title,
-                            name="origin",
-                            github_login=self.github_token,
-                            github_passwd=self.github_token,
-                        )
-                    except Exception as error:
-                        # handle the exception
-                        print("An exception occurred:", error)
-
-                    # Add github token to dataset origin remote url
-                    try:
-                        origin = self.repo.remote("origin")
-                        origin_url = next(origin.urls)
-                        if "@" not in origin_url:
-                            origin.set_url(
-                                origin_url.replace(
-                                    "https://",
-                                    "https://" + self.github_token + "@",
-                                ),
-                            )
-                    except git.exc.NoSuchPathError:
-                        pass
-
-                    self._add_github_repo_description(repo_title, dataset_description)
-                    for pattern in NO_ANNEX_FILE_PATTERNS:
-                        d.no_annex(pattern)
-                    self.add_new_dataset(dataset_description, dataset_dir)
-
-                    # Create DATS.json if it exists in directory and 1 level deep subdir
-                    dats_path: str = os.path.join(dataset_dir, "DATS.json")
-                    if existing_dats_path := self._check_file_present(
-                        dataset_dir, "dats.json"
-                    ):
-                        if self.verbose:
-                            print(f"Found existing DATS.json at {existing_dats_path}")
-                        if existing_dats_path != dats_path:
-                            shutil.copy(existing_dats_path, dats_path)
-                        self._add_source_data_submodule_if_derived_from_conp_dataset(
-                            dats_path, dataset_dir
-                        )
-                    else:
-                        self._create_new_dats(
-                            dataset_dir,
-                            dats_path,
-                            dataset_description,
-                            d,
-                        )
-                    # Move the logo into the root directory if found in 1 level deep subdir
-                    logo_path = os.path.join(dataset_dir, "logo.png")
-                    if existing_logo_path := self._check_file_present(
-                        dataset_dir, "logo.png"
-                    ):
-                        if self.verbose:
-                            print(f"Found logo at {existing_logo_path}")
-                        if existing_logo_path != logo_path:
-                            os.rename(existing_logo_path, logo_path)
-
-                    # Create README.md if it doesn't exist
-                    if not os.path.isfile(os.path.join(dataset_dir, "README.md")):
-                        readme = self.get_readme_content(dataset_description)
-                        self._create_readme(
-                            readme, os.path.join(dataset_dir, "README.md")
-                        )
-                    d.save()
-                    d.publish(to="origin")
-                    self.repo.git.submodule(
-                        "add",
-                        r[0][1].replace(self.github_token + "@", ""),
+                    self._notify_new_dataset(
+                        dataset_description,
+                        branch_name,
                         dataset_rel_dir,
                     )
-                    modified = True
-                    commit_msg = "Created " + dataset_description["title"]
+                    print(
+                        f"New dataset detected: {dataset_description['title']}. "
+                        "Notification sent; skipping automatic DataLad creation."
+                    )
+                    continue
                 else:  # Dataset already existing locally
                     try:
                         # Try normal checkout first
@@ -345,11 +281,25 @@ class BaseCrawler:
                             raise
 
                     try:
-                        self.repo.git.merge("-n", "--no-verify", "master")
+                        self.repo.git.execute(
+                            [
+                                "git",
+                                "-c",
+                                "filter.annex.process=",
+                                "merge",
+                                "-n",
+                                "--no-verify",
+                                "master",
+                            ]
+                        )
                     except Exception as e:
                         print(f"Error while merging master into {branch_name}: {e}")
                         print("Skipping this dataset")
-                        self.repo.git.merge("--abort")
+                        try:
+                            self.repo.git.merge("--abort")
+                        except git.exc.GitCommandError as abort_error:
+                            if "MERGE_HEAD missing" not in str(abort_error):
+                                raise
                         try:
                             # Use the same safe checkout to go back to master
                             self.repo.git.checkout("-f", "master")
@@ -434,6 +384,47 @@ class BaseCrawler:
                     )
                 else:
                     raise
+
+    def _load_config(self):
+        if not self.config_path or not os.path.isfile(self.config_path):
+            return {}
+        with open(self.config_path) as f:
+            return json.load(f)
+
+    def _notify_new_dataset(self, dataset_description, branch_name, dataset_rel_dir):
+        recipient = self.config.get("notify_email", "wangshen.mcin@gmail.com")
+        from_email = self.config.get("from_email", "conp-bot@localhost")
+        sendmail_path = self.config.get("sendmail_path", "/usr/sbin/sendmail")
+
+        msg = EmailMessage()
+        msg["To"] = recipient
+        msg["From"] = from_email
+        msg["Subject"] = (
+            "[CONP crawler] New dataset needs manual DataLad import: "
+            f"{dataset_description['title']}"
+        )
+        msg.set_content(
+            "\n".join(
+                [
+                    "The CONP crawler found a dataset that does not have an origin branch yet.",
+                    "",
+                    "Automatic DataLad repository creation is disabled on this host.",
+                    "Please import this dataset manually.",
+                    "",
+                    f"Title: {dataset_description['title']}",
+                    f"Identifier: {dataset_description.get('identifier', '')}",
+                    f"Version: {dataset_description.get('version', '')}",
+                    f"Branch: {branch_name}",
+                    f"Project path: {dataset_rel_dir}",
+                ]
+            )
+        )
+
+        subprocess.run(
+            [sendmail_path, "-t"],
+            input=msg.as_bytes(),
+            check=True,
+        )
 
     def _add_github_repo_description(self, repo_title, dataset_description):
         url = "https://api.github.com/repos/{}/{}".format(
@@ -672,3 +663,4 @@ Functional checks:
         if source_dataset_link is not None and "github.com" in source_dataset_link:
             d = self.datalad.Dataset(os.path.join(dataset_dir, source_dataset_id))
             d.create()
+
