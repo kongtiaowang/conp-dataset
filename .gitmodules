@@ -645,3 +645,7 @@
 	path = projects/A_steady_state_visual_evoked_potential__SSVEP__based_BCI_dataset_in_children_and_adolescents_bk
 	url = ./projects/A_steady_state_visual_evoked_potential__SSVEP__based_BCI_dataset_in_children_and_adolescents_bk
 	datalad-id = 98b915ec-f2f9-4429-9c4d-9f7ddfc582ce
+[submodule "projects/A_steady_state_visual_evoked_potential__SSVEP"]
+	path = projects/A_steady_state_visual_evoked_potential__SSVEP
+	url = ./projects/A_steady_state_visual_evoked_potential__SSVEP
+	datalad-id = 8324c1d4-fa90-4889-9d1a-5d6c9879fd9d
