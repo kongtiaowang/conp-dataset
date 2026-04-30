@@ -252,7 +252,6 @@ class BaseCrawler:
         except Exception as e:
             print(f"Warning: Failed to fetch remote branches: {e}")
             print("Continuing with cached remote branch information...")
-        
         dataset_description_list = self.get_all_dataset_description()
         for dataset_description in dataset_description_list:
             try:
