@@ -2,7 +2,6 @@ import abc
 import json
 import os
 import re
-import shutil
 import subprocess
 from email.message import EmailMessage
 
@@ -13,7 +12,6 @@ from datalad import api
 from scripts.Crawlers.constants import DATS_FIELDS
 from scripts.Crawlers.constants import LICENSE_CODES
 from scripts.Crawlers.constants import MODALITIES
-from scripts.Crawlers.constants import NO_ANNEX_FILE_PATTERNS
 from scripts.Crawlers.constants import REQUIRED_DATS_FIELDS
 
 
@@ -261,7 +259,9 @@ class BaseCrawler:
                 dataset_dir = os.path.join(self.basedir, dataset_rel_dir)
                 d = self.datalad.Dataset(dataset_dir)
                 # using remote_head
-                remote_branch_names = [ref.remote_head for ref in self.repo.remotes.origin.refs]
+                remote_branch_names = [
+                    ref.remote_head for ref in self.repo.remotes.origin.refs
+                ]
                 if branch_name not in remote_branch_names:  # New dataset
                     self._notify_new_dataset(
                         dataset_description,
